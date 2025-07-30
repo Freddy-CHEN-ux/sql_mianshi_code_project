@@ -609,3 +609,136 @@ FROM (
 )
 WHERE rn = 1
 ;
+
+--***********************场景一：取当前数据的上一条和下一条，直到取到满足条件的为止*********************************************--
+--***********************滑动窗口函数和sum()的用法结合*********************************************--
+-- 需求描述：
+-- 有一张入库成本表一个商品每次入库就会产生一条数据，里面包含商品id,入库时间，以及入库采购的成本，但由于某些某些原因，导致表中某些数据的成本是有丢失的.现在的逻辑是，
+-- 当成本丢失时，有两种取成本的方式，现在需要把两种成本都取出来，最后取2次成本的平均值作为本次入库的成本。
+-- 1.取同一个商品最近一次入库的有效成本（即存在成本时就为有效成本，无效成本为null)
+-- 2.取同一个商品紧接着一次入库的有效成本
+
+---1.测试表存在则删除
+drop table aaa001;
+---2.创建测试表
+create table aaa001
+(
+product_id string comment '商品id',
+into_warehouse_time string comment '入库时间',
+cost int comment '成本'
+)
+STORED AS ALIORC  
+TBLPROPERTIES ('columnar.nested.type'='true',
+    'comment'='测试表');
+---3.插入测试数据
+insert into aaa001 values
+('1101','2021-01-01',120),
+('1102','2021-01-01',150),
+('1102','2021-01-02',null),
+('1102','2021-01-03',null),
+('1102','2021-01-04',200),
+('1102','2021-01-05',210),
+('1103','2021-01-06',300),
+('1103','2021-01-07',null),
+('1103','2021-01-08',400),
+('1104','2022-01-01',111111),
+('1104','2022-01-02',null),
+('1104','2022-01-03',null),
+('1104','2022-01-04',22222),
+('1104','2022-01-05',null)
+;
+---4.查询sql
+select *
+from aaa001
+order by product_id ,into_warehouse_time 
+;
+--结果语句
+WITH temp AS (
+    select product_id,
+           into_warehouse_time,
+           cost,
+           sum(IF(cost is not NULL ,1,0)) over(partition by product_id order by into_warehouse_time asc) as last_flag
+           ,sum(IF(cost is not NULL ,1,0)) over(partition by product_id order by into_warehouse_time asc ROWS BETWEEN current row and UNBOUNDED FOLLOWING) as next_flag
+    from aaa001
+)
+,temp1 AS (
+    select product_id,
+           into_warehouse_time,
+           cost,
+        FIRST_VALUE(cost) over(partition by product_id,last_flag order by into_warehouse_time asc) as last_cost,
+        FIRST_VALUE(cost) over(partition by product_id,next_flag order by into_warehouse_time DESC) as next_cost
+    from temp
+)
+SELECT product_id,
+           into_warehouse_time,
+           cost,last_cost,
+           next_cost,(last_cost + next_cost)/2
+FROM temp1 
+;
+
+--***********************场景二：要计算每天每个员工当月累计的销售额，但是某些员工在某几天是没有销售记录的，需要特殊处理。*********************************************--
+--***********************难点在于怎么把确实的记录数据补上，需要使用炸裂函数和自然排序函数*********************************************--
+-- 需求描述:另工销售记是表我们素要每天统计每一个员工的当月累计销售额.
+---1.测试表存在则删除
+drop table aaa002;
+--2.创建测试表
+create table aaa002
+(
+sale_date string,
+emp_id int,
+emp_name string,
+sale_amount int
+)
+;
+--3.插入测试数据
+insert into table aaa002 values
+('2021-10-02',101,'张三',100),
+('2021-10-03',101,'张三',300),
+('2021-10-05',101,'张三',400),
+('2021-10-01',102,'李四',111),
+('2021-10-03',102,'李四',222),
+('2021-10-08',102,'李四',333)
+;
+---4.查询sql
+select
+*
+from aaa002
+order by emp_id ,sale_date 
+;
+--结果SQL
+with temp1 AS (
+    ---得到连续日期,而且是带emp_id和emp_name的
+    select t.emp_id
+        ,t.emp_name
+        ,start_date
+        , DATEDIFF(to_date(t.end_date,'yyyy-MM-dd'), to_date(t.start_date,'yyyy-MM-dd'), 'dd') AS date_diff
+    from
+    (
+        select emp_id
+            ,emp_name
+            ,MIN(sale_date) as start_date
+            ,max(sale_date) as end_date
+        from aaa002
+        group by emp_id,emp_name
+    )t
+)
+,temp2 AS (
+select
+    emp_id,
+    emp_name,
+     date_add(to_date(start_date), pos) AS sale_date
+from temp1
+lateral VIEW explode(sequence(0,date_diff)) number_table AS pos
+)
+, temp3 as (
+    select
+    temp2.emp_id,
+        temp2.emp_name,
+        temp2.sale_date,
+        aaa002.sale_amount
+    from temp2 
+    LEFT JOIN aaa002 ON temp2.emp_id = aaa002.emp_id AND temp2.sale_date = aaa002.sale_date
+)
+select emp_id,emp_name,sale_date,SUM(IF(sale_amount IS NULL ,0,sale_amount)) OVER (PARTITION BY emp_id ORDER BY sale_date asc) AS sale_amount
+from temp3
+;
