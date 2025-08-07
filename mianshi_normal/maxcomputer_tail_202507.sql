@@ -742,3 +742,204 @@ lateral VIEW explode(sequence(0,date_diff)) number_table AS pos
 select emp_id,emp_name,sale_date,SUM(IF(sale_amount IS NULL ,0,sale_amount)) OVER (PARTITION BY emp_id ORDER BY sale_date asc) AS sale_amount
 from temp3
 ;
+
+
+-***********************综合题目*********************************************--
+-- 某在线购物平台的系统中，有三个主要的数据表：客户表（customers)、订单表（orders)和订单商品表（order_items)。这些表分别记录了客户的基本信息，订单信息的商品详细信息。
+CREATE TABLE IF NOT EXISTS customers (
+    customer_id INT,
+    email STRING,
+    name STRING,
+    phone STRING,
+    created_at DATETIME
+);
+-- 插入示例数据到customers表
+INSERT INTO customers (customer_id, email, name, phone, created_at) VALUES
+(1, 'zhangsan@example.com', '张三', '13800138000', CAST('2023-01-01 10:00:00' AS DATETIME)),
+(2, 'lisi@example.com', '李四', '13900139000', CAST('2023-02-15 14:30:00' AS DATETIME));
+CREATE TABLE IF NOT EXISTS orders (
+    order_id INT,
+    customer_id INT,
+    order_date DATETIME,
+    total_amount DECIMAL(10,2)
+);
+-- 插入示例数据到orders表
+INSERT INTO orders (order_id, customer_id, order_date, total_amount) VALUES
+(101, 1, CAST('2023-01-15 13:45:00' AS DATETIME), 150.00),
+(102, 2, CAST('2023-02-20 11:20:00' AS DATETIME), 200.00),
+(103, 1, CAST('2023-03-25 16:10:00' AS DATETIME), 120.00);
+CREATE TABLE IF NOT EXISTS order_items (
+    order_item_id INT,
+    order_id INT,
+    product_id INT,
+    quantity INT,
+    price DECIMAL(10,2)
+);
+-- 插入示例数据到order_items表
+INSERT INTO order_items (order_item_id, order_id, product_id, quantity, price) VALUES
+(1001, 101, 1, 2, 50.00),
+(1002, 101, 2, 1, 50.00),
+(1003, 102, 3, 2, 100.00),
+(1004, 103, 1, 1, 50.00),
+(1005, 103, 4, 1, 70.00);
+
+-- 这道题目要求编写SQL查询，查询所有订单在每个客户订单中的累计总金额，并按订单日期升序排序。
+SELECT o.order_id, o.customer_id, o.order_date, o.total_amount,
+    SUM(o.total_amount) OVER (
+      PARTITION BY o.customer_id ORDER BY o.order_date ASC
+    ) AS cumulative_total_amount
+FROM orders o
+ORDER BY o.customer_id, o.order_date ASC;
+
+-- 编写SQL,查询每个客户的最新订单总金额及其在客户所有订单总金额中的比例。
+
+-- 编写SQL,查询每个订单的总商品数量及其包含的商品列表(用逗号）。
+SELECT oi.order_id,
+    SUM(oi.quantity) AS total_quantity,
+    WM_CONCAT(',',oi.product_id) AS product_list
+FROM order_items oi
+GROUP BY oi.order_id
+;
+
+-- 写SQL,查询每个客户的姓名及其上一个订单的总金额
+SELECT c.name,
+    LAG(o.total_amount) OVER (PARTITION BY c.name ORDER BY o.order_date ASC) AS previous_order_amount
+  FROM customers c
+  JOIN orders o
+    ON c.customer_id = o.customer_id
+ ORDER BY c.name,
+          o.order_date ASC;
+
+-- 写SQL,查询订单总金额超过其客户所有订单平均金额的订单
+SELECT o1.order_id
+  FROM orders o1
+ WHERE o1.total_amount > (
+        SELECT AVG(o2.total_amount)
+          FROM orders o2 WHERE o1.customer_id = o2.customer_id
+       ) ;
+
+
+
+--***********************综合题目*********************************************************************************--
+-- 背景：
+-- 假设我们有一张用户观看行为日志表 ev_fss_view，记录了用户的基本信息、注册时间以及每日的观看行为。
+-- 题目列表：
+-- 计算总独立用户数（UV）和所有用户的平均年龄。
+-- 统计每日的日活跃用户平均观看时长，以及当日的新增注册用户数。
+-- 找出在每一天中，观看总时长最长的用户（“日度观看冠军”）。
+-- 以用户注册日为维度，计算次日留存用户数和次日留存率。
+-- （次日留存率 = (注册日后第一天仍活跃的用户数 / 注册日当天总注册用户数) * 100%）
+-- 计算每个用户截至每一天的累计总观看时长。
+-- 筛选出所有单日观看总时长超过20分钟的观看记录（用户和日期）。
+-- 找出所有“高质量”用户，定义为：该用户在他所有有过观看记录的日子里，每天的观看总时长都超过了20分钟。
+
+CREATE TABLE IF NOT EXISTS ev_fss_view (
+    user_id INT,               -- 用户ID
+    age INT,                   -- 用户年龄
+    register_time VARCHAR(20), -- 用户注册时间 (格式: 'YYYY/MM/DD HH:MI:SS')
+    ymd VARCHAR(8),            -- 观看日期 (格式: 'YYYYMMDD')
+    view_time INT              -- 当次观看时长（单位：分钟）
+);
+
+INSERT INTO ev_fss_view (user_id, age, register_time, ymd, view_time) VALUES
+-- 用户101: 2023/01/15注册, 15号和16号活跃 -> 成功留存
+(101, 25, '2023/01/15 10:00:00', '20230115', 10),
+(101, 25, '2023/01/15 10:00:00', '20230115', 15), -- 当天多次观看
+(101, 25, '2023/01/15 10:00:00', '20230116', 30), -- 次日活跃
+
+-- 用户102: 2023/01/15注册, 17号才活跃 -> 未能次日留存
+(102, 30, '2023/01/15 11:30:00', '20230117', 15),
+(102, 30, '2023/01/15 11:30:00', '20230117', 15), -- 17号观看时长冠军
+
+-- 用户103: 2023/01/16注册, 17号活跃 -> 成功留存
+(103, 22, '2023/01/16 09:00:00', '20230117', 25),
+
+-- 用户104: 高质量用户，所有观看日的总时长都 > 20
+(104, 35, '2023/01/18 14:00:00', '20230118', 25),
+(104, 35, '2023/01/18 14:00:00', '20230119', 30),
+
+-- 用户105: 非高质量用户，有一天观看总时长 < 20
+(105, 28, '2023/01/18 16:00:00', '20230118', 15), -- 这天时长 < 20
+(105, 28, '2023/01/18 16:00:00', '20230119', 25);
+
+-- 计算总独立用户数（UV）和所有用户的平均年龄。
+SELECT COUNT(DISTINCT user_id) as uv,AVG(age) as avg_age
+FROM 
+(
+   SELECT user_id ,age
+    FROM ev_fss_view
+    group by user_id,age 
+) a
+;
+
+-- 统计每日的日活跃用户平均观看时长，以及当日的新增注册用户数。
+WITH t1 as (
+    SELECT REPLACE(SUBSTR(register_time,1,10),'/','') AS register_date,COUNT(DISTINCT user_id) as register_cnt
+    from ev_fss_view
+    GROUP BY REPLACE(SUBSTR(register_time,1,10),'/','')
+)
+, t2 as (
+    SELECT ymd,AVG(view_time) as avg_view_time
+    from ev_fss_view
+    GROUP BY ymd
+)
+SELECT t2.ymd,t2.avg_view_time,t1.register_cnt
+from t2 LEFT JOIN t1
+ON t2.ymd = t1.register_date
+;
+
+-- 找出在每一天中，观看总时长最长的用户（“日度观看冠军”）。
+with t1 AS (
+    SELECT ymd,user_id,SUM(view_time) as total_view_time
+    FROM ev_fss_view
+    group by ymd,user_id
+)
+, t2 AS (
+    SELECT ymd,user_id,total_view_time,ROW_NUMBER() over(PARTITION BY ymd ORDER BY total_view_time DESC) AS rn
+    FROM t1
+)
+SELECT ymd,user_id,total_view_time
+FROM t2
+WHERE rn = 1
+;
+
+-- 以用户注册日为维度，计算次日留存用户数和次日留存率。
+-- （次日留存率 = (注册日后第一天仍活跃的用户数 / 注册日当天总注册用户数) * 100%）
+with t1 AS (
+    SELECT REPLACE(SUBSTR(register_time,1,10),'/','-') AS register_date,user_id
+    FROM ev_fss_view
+    group by REPLACE(SUBSTR(register_time,1,10),'/','-'),user_id
+)
+, t2 AS (
+    SELECT CONCAT(SUBSTRING(ymd,1,4),'-',SUBSTRING(ymd,5,2),'-',SUBSTRING(ymd,7,2)) as ymd,user_id
+    FROM ev_fss_view
+    group by CONCAT(SUBSTRING(ymd,1,4),'-',SUBSTRING(ymd,5,2),'-',SUBSTRING(ymd,7,2)),user_id
+)
+, t3 AS (
+    SELECT t1.register_date,t1.user_id as register_user_id,t2.user_id as retention_user_id
+    FROM t1 LEFT JOIN t2
+    ON t1.user_id = t2.user_id
+    AND t1.register_date = DATE_SUB(t2.ymd,1) 
+)
+SELECT register_date,COUNT(DISTINCT retention_user_id)/COUNT(DISTINCT register_user_id) AS retention_rate
+FROM t3
+GROUP BY register_date
+;
+
+-- 计算每个用户截至每一天的累计总观看时长。
+SELECT user_id,SUM(view_time) OVER (PARTITION BY user_id ORDER BY ymd asc ) AS cumulative_view_time
+FROM ev_fss_view
+;
+
+-- 筛选出所有单日观看总时长超过20分钟的观看记录（用户和日期）。
+SELECT DISTINCT user_id,ymd
+FROM ev_fss_view
+WHERE view_time > 20
+;
+
+-- 找出所有“高质量”用户，定义为：该用户在他所有有过观看记录的日子里，每天的观看总时长都超过了20分钟。
+SELECT user_id
+FROM ev_fss_view
+GROUP BY user_id
+HAVING COUNT(DISTINCT CASE WHEN view_time > 20 THEN ymd END) = COUNT(DISTINCT ymd)
+;
